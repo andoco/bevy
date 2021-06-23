@@ -5,7 +5,11 @@ use crate::{
         RunCriteriaDescriptorOrLabel, State, SystemDescriptor, SystemLabel,
     },
 };
-use std::{fmt::Debug, hash::Hash, sync::atomic::{AtomicU32, Ordering}};
+use std::{
+    fmt::Debug,
+    hash::Hash,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 static NEXT_SEQUENCE_ID: AtomicU32 = AtomicU32::new(0);
 
@@ -169,7 +173,7 @@ impl SystemSet {
         let start = NEXT_SEQUENCE_ID.fetch_add(systems.len() as u32, Ordering::Relaxed);
         let mut last_label: Option<SequenceId> = None;
         for (idx, descriptor) in systems.iter_mut().enumerate() {
-            let label = SequenceId(start + idx as u32);
+            let label = SequenceId(start.wrapping_add(idx as u32));
             match descriptor {
                 SystemDescriptor::Parallel(descriptor) => {
                     descriptor.labels.push(label.dyn_clone());
