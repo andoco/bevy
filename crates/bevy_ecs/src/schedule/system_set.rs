@@ -5,7 +5,10 @@ use crate::{
         RunCriteriaDescriptorOrLabel, State, SystemDescriptor, SystemLabel,
     },
 };
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::{fmt::Debug, hash::Hash};
+
+static NEXT_SEQUENCE_ID: AtomicU32 = AtomicU32::new(0);
 
 /// A builder for describing several systems at the same time.
 pub struct SystemSet {
@@ -15,6 +18,7 @@ pub struct SystemSet {
     pub(crate) before: Vec<BoxedSystemLabel>,
     pub(crate) after: Vec<BoxedSystemLabel>,
     pub(crate) ambiguity_sets: Vec<BoxedAmbiguitySetLabel>,
+    sequential: bool,
 }
 
 impl Default for SystemSet {
@@ -26,6 +30,7 @@ impl Default for SystemSet {
             before: Vec::new(),
             after: Vec::new(),
             ambiguity_sets: Vec::new(),
+            sequential: false,
         }
     }
 }
@@ -89,6 +94,15 @@ impl SystemSet {
         self
     }
 
+    /// If called, all systems added uill run sequentially in insertion order.
+    ///
+    /// This will prevent any of the included systems from running in parallel. This may cause a
+    /// notable negative performance impact when using longer running systems.
+    pub fn as_sequential(mut self) -> Self {
+        self.sequential = true;
+        self
+    }
+
     pub fn with_system(mut self, system: impl Into<SystemDescriptor>) -> Self {
         self.systems.push(system.into());
         self
@@ -122,7 +136,13 @@ impl SystemSet {
             before,
             after,
             ambiguity_sets,
+            sequential,
         } = self;
+
+        if sequential {
+            Self::sequentialize(&mut systems);
+        }
+
         for descriptor in &mut systems {
             match descriptor {
                 SystemDescriptor::Parallel(descriptor) => {
@@ -144,5 +164,37 @@ impl SystemSet {
             }
         }
         (run_criteria, systems)
+    }
+
+    fn sequentialize(systems: &mut Vec<SystemDescriptor>) {
+        let start = NEXT_SEQUENCE_ID.fetch_add(systems.len() as u32, Ordering::Relaxed);
+        let mut last_label: Option<SequenceId> = None;
+        for (idx, descriptor) in systems.iter_mut().enumerate() {
+            let label = SequenceId(start + idx as u32);
+            match descriptor {
+                SystemDescriptor::Parallel(descriptor) => {
+                    descriptor.labels.push(label.dyn_clone());
+                    if let Some(ref after) = last_label {
+                        descriptor.after.push(after.dyn_clone());
+                    }
+                }
+                SystemDescriptor::Exclusive(descriptor) => {
+                    descriptor.labels.push(label.dyn_clone());
+                    if let Some(ref after) = last_label {
+                        descriptor.after.push(after.dyn_clone());
+                    }
+                }
+            }
+            last_label = Some(label);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SequenceId(u32);
+
+impl SystemLabel for SequenceId {
+    fn dyn_clone(&self) -> Box<dyn SystemLabel> {
+        Box::new(<SequenceId>::clone(self))
     }
 }
