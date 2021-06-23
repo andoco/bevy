@@ -93,7 +93,7 @@ impl SystemSet {
         self
     }
 
-    /// If called, all systems added uill run sequentially in insertion order.
+    /// If called, all systems added will run sequentially in insertion order.
     ///
     /// This will prevent any of the included systems from running in parallel. This may cause a
     /// notable negative performance impact when using longer running systems.
