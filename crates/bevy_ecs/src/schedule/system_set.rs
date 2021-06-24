@@ -123,7 +123,6 @@ impl SystemSet {
             after,
             ambiguity_sets,
         } = self;
-
         for descriptor in &mut systems {
             match descriptor {
                 SystemDescriptor::Parallel(descriptor) => {
