@@ -5,13 +5,7 @@ use crate::{
         RunCriteriaDescriptorOrLabel, State, SystemDescriptor, SystemLabel,
     },
 };
-use std::{
-    fmt::Debug,
-    hash::Hash,
-    sync::atomic::{AtomicU32, Ordering},
-};
-
-static NEXT_SEQUENCE_ID: AtomicU32 = AtomicU32::new(0);
+use std::{fmt::Debug, hash::Hash};
 
 /// A builder for describing several systems at the same time.
 pub struct SystemSet {
@@ -21,7 +15,6 @@ pub struct SystemSet {
     pub(crate) before: Vec<BoxedSystemLabel>,
     pub(crate) after: Vec<BoxedSystemLabel>,
     pub(crate) ambiguity_sets: Vec<BoxedAmbiguitySetLabel>,
-    sequential: bool,
 }
 
 impl Default for SystemSet {
@@ -33,7 +26,6 @@ impl Default for SystemSet {
             before: Vec::new(),
             after: Vec::new(),
             ambiguity_sets: Vec::new(),
-            sequential: false,
         }
     }
 }
@@ -97,15 +89,6 @@ impl SystemSet {
         self
     }
 
-    /// If called, all systems added will run sequentially in insertion order.
-    ///
-    /// This will prevent any of the included systems from running in parallel. This may cause a
-    /// notable negative performance impact when using longer running systems.
-    pub fn as_sequential(mut self) -> Self {
-        self.sequential = true;
-        self
-    }
-
     pub fn with_system(mut self, system: impl Into<SystemDescriptor>) -> Self {
         self.systems.push(system.into());
         self
@@ -139,12 +122,7 @@ impl SystemSet {
             before,
             after,
             ambiguity_sets,
-            sequential,
         } = self;
-
-        if sequential {
-            Self::sequentialize(&mut systems);
-        }
 
         for descriptor in &mut systems {
             match descriptor {
@@ -167,94 +145,5 @@ impl SystemSet {
             }
         }
         (run_criteria, systems)
-    }
-
-    fn sequentialize(systems: &mut Vec<SystemDescriptor>) {
-        let start = NEXT_SEQUENCE_ID.fetch_add(systems.len() as u32, Ordering::Relaxed);
-        let mut last_label: Option<SequenceId> = None;
-        for (idx, descriptor) in systems.iter_mut().enumerate() {
-            let label = SequenceId(start.wrapping_add(idx as u32));
-            match descriptor {
-                SystemDescriptor::Parallel(descriptor) => {
-                    descriptor.labels.push(label.dyn_clone());
-                    if let Some(ref after) = last_label {
-                        descriptor.after.push(after.dyn_clone());
-                    }
-                }
-                SystemDescriptor::Exclusive(descriptor) => {
-                    descriptor.labels.push(label.dyn_clone());
-                    if let Some(ref after) = last_label {
-                        descriptor.after.push(after.dyn_clone());
-                    }
-                }
-            }
-            last_label = Some(label);
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct SequenceId(u32);
-
-impl SystemLabel for SequenceId {
-    fn dyn_clone(&self) -> Box<dyn SystemLabel> {
-        Box::new(<SequenceId>::clone(self))
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::prelude::*;
-
-    fn dummy_system() {}
-
-    fn labels(system: &SystemDescriptor) -> &Vec<Box<dyn SystemLabel>> {
-        match system {
-            SystemDescriptor::Parallel(descriptor) => &descriptor.labels,
-            SystemDescriptor::Exclusive(descriptor) => &descriptor.labels,
-        }
-    }
-
-    fn after(system: &SystemDescriptor) -> &Vec<Box<dyn SystemLabel>> {
-        match system {
-            SystemDescriptor::Parallel(descriptor) => &descriptor.after,
-            SystemDescriptor::Exclusive(descriptor) => &descriptor.after,
-        }
-    }
-
-    #[test]
-    pub fn sequential_adds_labels() {
-        let system_set = SystemSet::new()
-            .as_sequential()
-            .with_system(dummy_system.system())
-            .with_system(dummy_system.system())
-            .with_system(dummy_system.system());
-        let (_, systems) = system_set.bake();
-
-        assert_eq!(systems.len(), 3);
-        assert_eq!(labels(&systems[0]), &vec![SequenceId(0).dyn_clone()]);
-        assert_eq!(labels(&systems[1]), &vec![SequenceId(1).dyn_clone()]);
-        assert_eq!(labels(&systems[2]), &vec![SequenceId(2).dyn_clone()]);
-        assert_eq!(after(&systems[0]), &vec![]);
-        assert_eq!(after(&systems[1]), &vec![SequenceId(0).dyn_clone()]);
-        assert_eq!(after(&systems[2]), &vec![SequenceId(1).dyn_clone()]);
-    }
-
-    #[test]
-    pub fn non_sequential_has_no_labels_by_default() {
-        let system_set = SystemSet::new()
-            .with_system(dummy_system.system())
-            .with_system(dummy_system.system())
-            .with_system(dummy_system.system());
-        let (_, systems) = system_set.bake();
-
-        assert_eq!(systems.len(), 3);
-        assert_eq!(labels(&systems[0]), &vec![]);
-        assert_eq!(labels(&systems[1]), &vec![]);
-        assert_eq!(labels(&systems[2]), &vec![]);
-        assert_eq!(after(&systems[0]), &vec![]);
-        assert_eq!(after(&systems[1]), &vec![]);
-        assert_eq!(after(&systems[2]), &vec![]);
     }
 }
